@@ -45,6 +45,20 @@ export interface LLMConfig {
 
 export function getLLMConfig(): LLMConfig {
   let provider = process.env.LLM_PROVIDER;
+  // 优先使用 Gemini
+  if (process.env.GEMINI_API_KEY) {
+    if (EMBEDDING_DIMENSION !== OLLAMA_EMBEDDING_DIMENSION) {
+      throw new Error('EMBEDDING_DIMENSION must be 1024 for Gemini (using Ollama dimension)');
+    }
+    return {
+      provider: 'ollama', // 复用 ollama 配置
+      url: 'gemini', // 特殊标记
+      chatModel: 'gemini-pro',
+      embeddingModel: 'gemini-embedding',
+      stopWords: [],
+      apiKey: process.env.GEMINI_API_KEY,
+    };
+  }
   if (provider ? provider === 'openai' : process.env.OPENAI_API_KEY) {
     if (EMBEDDING_DIMENSION !== OPENAI_EMBEDDING_DIMENSION) {
       throw new Error('EMBEDDING_DIMENSION must be 1536 for OpenAI');
@@ -139,6 +153,16 @@ export async function chatCompletion(
 ) {
   const config = getLLMConfig();
   body.model = body.model ?? config.chatModel;
+
+  // 如果使用 Gemini，走 Gemini 路径
+  if (config.url === 'gemini') {
+    const { chatCompletionGemini } = await import('./gemini');
+    const start = Date.now();
+    const content = await chatCompletionGemini(body.messages);
+    const ms = Date.now() - start;
+    return { content, retries: 0, ms };
+  }
+
   const stopWords = body.stop ? (typeof body.stop === 'string' ? [body.stop] : body.stop) : [];
   if (config.stopWords) stopWords.push(...config.stopWords);
   console.log(body);
@@ -253,6 +277,15 @@ export async function fetchEmbeddingBatch(texts: string[]) {
 }
 
 export async function fetchEmbedding(text: string) {
+  const config = getLLMConfig();
+  // 如果使用 Gemini，走 Gemini embedding 路径
+  if (config.url === 'gemini') {
+    const { fetchEmbeddingGemini } = await import('./gemini');
+    const start = Date.now();
+    const embedding = await fetchEmbeddingGemini(text);
+    const ms = Date.now() - start;
+    return { embedding, ollama: true as const, retries: 0, ms };
+  }
   const { embeddings, ...stats } = await fetchEmbeddingBatch([text]);
   return { embedding: embeddings[0], ...stats };
 }
